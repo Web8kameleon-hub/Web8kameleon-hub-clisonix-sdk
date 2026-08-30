@@ -1,0 +1,102 @@
+name: Publish @clisonix/sdk
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Verify the release or publish it to npm
+        required: true
+        default: verify
+        type: choice
+        options:
+          - verify
+          - publish
+
+concurrency:
+  group: npm-publish-clisonix-sdk
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Verify public package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: typescript
+    steps:
+      - name: Require main for publishing
+        if: ${{ inputs.mode == 'publish' }}
+        run: |
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "::error::Publishing is allowed only from refs/heads/main."
+            exit 1
+          fi
+
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: typescript/package-lock.json
+
+      - name: Install trusted-publishing npm CLI
+        run: npm install --global npm@11.9.0
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build package
+        run: npm run build
+
+      - name: Run public-boundary tests
+        run: npm test
+
+      - name: Audit runtime dependencies
+        run: npm audit --omit=dev
+
+      - name: Inspect package contents
+        run: npm run pack:check
+
+  publish:
+    name: Publish with npm trusted publishing
+    if: ${{ inputs.mode == 'publish' }}
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    defaults:
+      run:
+        working-directory: typescript
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: typescript/package-lock.json
+
+      - name: Install trusted-publishing npm CLI
+        run: npm install --global npm@11.9.0
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Refuse an existing version
+        run: |
+          PACKAGE_VERSION="$(node -p "require('./package.json').version")"
+          if npm view "@clisonix/sdk@$PACKAGE_VERSION" version >/dev/null 2>&1; then
+            echo "::error::@clisonix/sdk@$PACKAGE_VERSION already exists on npm."
+            exit 1
+          fi
+
+      - name: Publish public package
+        run: npm publish --provenance --access public
