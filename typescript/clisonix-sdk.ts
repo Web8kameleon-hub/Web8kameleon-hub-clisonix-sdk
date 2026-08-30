@@ -1,13 +1,13 @@
 /**
  * Clisonix Cloud TypeScript SDK
  * @version 1.0.0
- * @description Official TypeScript SDK for Clisonix Cloud API
+ * @description Official TypeScript client for the public Clisonix API
  * 
  * Features:
  * - Neural harmonic processing APIs
  * - EEG signal analysis
- * - ASI Trinity monitoring
- * - Real-time data streaming
+ * - Sanitized service availability
+ * - High-level ASI availability
  * - Billing and subscription management
  */
 
@@ -18,14 +18,27 @@
 export interface ClisonixConfig {
   apiKey: string;
   baseUrl?: string;
+  excelBaseUrl?: string;
   timeout?: number;
   retries?: number;
 }
 
+function readEnvironment(name: string): string | undefined {
+  return typeof process !== 'undefined' ? process.env?.[name] : undefined;
+}
+
 const DEFAULT_CONFIG = {
-  baseUrl: process.env.CLISONIX_API_URL || 'https://api.clisonix.com',
+  baseUrl: readEnvironment('CLISONIX_API_URL') || 'https://api.clisonix.com',
+  excelBaseUrl: readEnvironment('CLISONIX_EXCEL_URL') || 'https://excel.clisonix.com',
   timeout: 30000,
   retries: 3
+};
+
+type PublicHttpConfig = {
+  apiKey: string;
+  baseUrl: string;
+  timeout: number;
+  retries: number;
 };
 
 // =============================================================================
@@ -38,50 +51,13 @@ export interface HealthResponse {
   status: 'healthy' | 'degraded' | 'unhealthy';
   version: string;
   timestamp: string;
-  instance_id: string;
-  uptime_app_seconds: number;
-  system: SystemMetrics;
-  redis: ServiceStatus;
-  database: ServiceStatus;
   environment: 'development' | 'staging' | 'production';
 }
 
 export interface StatusResponse {
   timestamp: string;
-  instance_id: string;
   status: 'operational' | 'degraded' | 'maintenance';
-  uptime: string;
-  memory: {
-    used: number;
-    total: number;
-  };
-  system: SystemMetrics;
-  redis: ServiceStatus;
-  database: ServiceStatus;
-}
-
-export interface SystemMetrics {
-  cpu_percent: number;
-  memory_percent: number;
-  memory_total: number;
-  memory_available: number;
-  disk_percent: number;
-  disk_total: number;
-  net_bytes_sent: number;
-  net_bytes_recv: number;
-  processes: number;
-  hostname: string;
-  boot_time: number;
-  uptime_seconds: number;
-}
-
-export interface ServiceStatus {
-  status: 'connected' | 'disconnected' | 'degraded';
-  message?: string;
-  connected_clients?: number;
-  used_memory?: string;
-  uptime_seconds?: number;
-  response_time_ms?: number;
+  uptime?: string;
 }
 
 // Brain Types
@@ -140,42 +116,9 @@ export interface EEGFrequencyBands {
 
 // ASI Types
 export interface ASIStatus {
-  asi_active: boolean;
-  components: {
-    alba: ComponentStatus;
-    albi: ComponentStatus;
-    jona: ComponentStatus;
-  };
-  overall_health: number;
-  last_sync: string;
-}
-
-export interface ComponentStatus {
-  active: boolean;
-  health: number;
-  last_heartbeat: string;
-  metrics: Record<string, number>;
-}
-
-export interface ALBAMetrics {
-  network_latency_ms: number;
-  active_streams: number;
-  buffer_utilization: number;
-  throughput_mbps: number;
-}
-
-export interface ALBIMetrics {
-  neural_load: number;
-  pattern_matches: number;
-  processing_queue: number;
-  goroutines: number;
-}
-
-export interface JONAMetrics {
-  coordination_score: number;
-  active_tasks: number;
-  completed_today: number;
-  error_rate: number;
+  available: boolean;
+  status: 'available' | 'degraded' | 'unavailable';
+  updatedAt?: string;
 }
 
 // Billing Types
@@ -217,13 +160,15 @@ export interface APIError {
 // =============================================================================
 
 class HttpClient {
-  private config: Required<ClisonixConfig>;
+  private config: PublicHttpConfig;
 
   constructor(config: ClisonixConfig) {
     this.config = {
-      ...DEFAULT_CONFIG,
-      ...config
-    } as Required<ClisonixConfig>;
+      apiKey: config.apiKey,
+      baseUrl: config.baseUrl || DEFAULT_CONFIG.baseUrl,
+      timeout: config.timeout || DEFAULT_CONFIG.timeout,
+      retries: config.retries || DEFAULT_CONFIG.retries
+    };
   }
 
   private async request<T>(
@@ -324,14 +269,37 @@ export class ClisonixError extends Error {
 class CoreAPI {
   constructor(private client: HttpClient) {}
 
-  /** Get system health status */
+  /** Get a sanitized public health status without host or topology data. */
   async health(): Promise<HealthResponse> {
-    return this.client.get('/health');
+    const data = await this.client.get<Record<string, unknown>>('/health');
+    const status = data.status === 'healthy' || data.status === 'degraded'
+      ? data.status
+      : 'unhealthy';
+    const environment = data.environment === 'development' || data.environment === 'staging'
+      ? data.environment
+      : 'production';
+
+    return {
+      service: String(data.service || 'clisonix-api'),
+      status,
+      version: String(data.version || 'unknown'),
+      timestamp: String(data.timestamp || new Date().toISOString()),
+      environment
+    };
   }
 
-  /** Get detailed system status */
+  /** Get a sanitized public service status. */
   async status(): Promise<StatusResponse> {
-    return this.client.get('/status');
+    const data = await this.client.get<Record<string, unknown>>('/status');
+    const status = data.status === 'operational' || data.status === 'degraded'
+      ? data.status
+      : 'maintenance';
+
+    return {
+      timestamp: String(data.timestamp || new Date().toISOString()),
+      status,
+      ...(typeof data.uptime === 'string' ? { uptime: data.uptime } : {})
+    };
   }
 
   /** Simple ping check */
@@ -418,34 +386,28 @@ class EEGAPI {
 class ASIAPI {
   constructor(private client: HttpClient) {}
 
-  /** Get overall ASI status */
+  /** Get high-level availability without component or runtime metrics. */
   async getStatus(): Promise<ASIStatus> {
-    return this.client.get('/asi/status');
+    const data = await this.client.get<Record<string, unknown>>('/asi/status');
+    const available = data.asi_active === true || data.available === true;
+    const health = typeof data.overall_health === 'number' ? data.overall_health : undefined;
+    const status = !available
+      ? 'unavailable'
+      : health !== undefined && health < 0.75
+        ? 'degraded'
+        : 'available';
+
+    return {
+      available,
+      status,
+      ...(typeof data.last_sync === 'string' ? { updatedAt: data.last_sync } : {})
+    };
   }
 
-  /** Get ASI health */
-  async getHealth(): Promise<{ healthy: boolean; components: Record<string, boolean> }> {
-    return this.client.get('/asi/health');
-  }
-
-  /** Get ALBA metrics */
-  async getALBAMetrics(): Promise<ALBAMetrics> {
-    return this.client.get('/asi/alba/metrics');
-  }
-
-  /** Get ALBI metrics */
-  async getALBIMetrics(): Promise<ALBIMetrics> {
-    return this.client.get('/asi/albi/metrics');
-  }
-
-  /** Get JONA metrics */
-  async getJONAMetrics(): Promise<JONAMetrics> {
-    return this.client.get('/asi/jona/metrics');
-  }
-
-  /** Trigger manual sync */
-  async triggerSync(): Promise<{ synced: boolean; timestamp: string }> {
-    return this.client.post('/asi/sync');
+  /** Get a boolean health result without exposing protected components. */
+  async getHealth(): Promise<{ healthy: boolean }> {
+    const data = await this.client.get<Record<string, unknown>>('/asi/health');
+    return { healthy: data.healthy === true };
   }
 }
 
@@ -487,75 +449,13 @@ class BillingAPI {
 }
 
 /**
- * Reporting API - Docker and system metrics
- * Uses port 8001
- */
-class ReportingAPI {
-  private baseUrl: string;
-  private apiKey: string;
-
-  constructor(apiKey: string, baseUrl: string = process.env.CLISONIX_REPORTING_URL || 'https://reporting.clisonix.com') {
-    this.apiKey = apiKey;
-    this.baseUrl = baseUrl;
-  }
-
-  private async request<T>(path: string): Promise<T> {
-    const response = await fetch(`${this.baseUrl}${path}`, {
-      headers: { 'X-API-Key': this.apiKey }
-    });
-    return response.json() as Promise<T>;
-  }
-
-  /** Get Docker containers */
-  async getDockerContainers(): Promise<{
-    containers: Array<{
-      id: string;
-      name: string;
-      status: string;
-      image: string;
-      ports: string;
-      created: string;
-    }>;
-    total: number;
-    healthy: number;
-    data_type: string;
-  }> {
-    return this.request('/api/reporting/docker-containers');
-  }
-
-  /** Get Docker stats */
-  async getDockerStats(): Promise<{
-    stats: Array<{
-      container: string;
-      cpu_percent: number;
-      memory_usage: string;
-      network_rx: string;
-      network_tx: string;
-    }>;
-  }> {
-    return this.request('/api/reporting/docker-stats');
-  }
-
-  /** Get system metrics */
-  async getSystemMetrics(): Promise<{
-    cpu: number;
-    memory: number;
-    disk: number;
-    uptime: string;
-  }> {
-    return this.request('/api/reporting/system-metrics');
-  }
-}
-
-/**
- * Excel API - Excel and reporting operations
- * Uses port 8002
+ * Excel API - user-facing report operations
  */
 class ExcelAPI {
   private baseUrl: string;
   private apiKey: string;
 
-  constructor(apiKey: string, baseUrl: string = process.env.CLISONIX_EXCEL_URL || 'https://excel.clisonix.com') {
+  constructor(apiKey: string, baseUrl: string) {
     this.apiKey = apiKey;
     this.baseUrl = baseUrl;
   }
@@ -588,11 +488,6 @@ class ExcelAPI {
     description: string;
   }>> {
     return this.request('GET', '/api/excel/templates');
-  }
-
-  /** Regenerate Excel data */
-  async regenerate(): Promise<{ success: boolean; message: string }> {
-    return this.request('POST', '/api/excel/regenerate');
   }
 }
 
@@ -631,7 +526,6 @@ export class Clisonix {
   public eeg: EEGAPI;
   public asi: ASIAPI;
   public billing: BillingAPI;
-  public reporting: ReportingAPI;
   public excel: ExcelAPI;
 
   constructor(config: ClisonixConfig) {
@@ -644,9 +538,10 @@ export class Clisonix {
     this.asi = new ASIAPI(this.client);
     this.billing = new BillingAPI(this.client);
     
-    // Separate microservices
-    this.reporting = new ReportingAPI(config.apiKey);
-    this.excel = new ExcelAPI(config.apiKey);
+    this.excel = new ExcelAPI(
+      config.apiKey,
+      config.excelBaseUrl || DEFAULT_CONFIG.excelBaseUrl
+    );
   }
 
   /**
