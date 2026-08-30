@@ -1,6 +1,6 @@
 # Clisonix TypeScript SDK
 
-Official TypeScript SDK for Clisonix Cloud API - Neural harmonic processing, EEG analysis, and ASI Trinity integration.
+Official TypeScript client for the public Clisonix API. The package exposes documented developer operations while intentionally excluding infrastructure, control-plane, kernel, hardware, fabric, and security internals.
 
 ## Installation
 
@@ -27,7 +27,7 @@ console.log(`System status: ${health.status}`);
 
 // Get ASI Trinity status
 const asiStatus = await clisonix.asi.getStatus();
-console.log(`ASI Active: ${asiStatus.asi_active}`);
+console.log(`ASI available: ${asiStatus.available}`);
 ```
 
 ## API Modules
@@ -92,19 +92,14 @@ await clisonix.eeg.stopSession(session.session_id);
 ```
 
 ### ASI API
-ASI Trinity system interface (ALBA, ALBI, JONA).
+Sanitized, high-level ASI availability. Component metrics and control-plane operations are intentionally not part of the public SDK.
 
 ```typescript
 // Get ASI status
 const status = await clisonix.asi.getStatus();
 
-// Get component metrics
-const albaMetrics = await clisonix.asi.getALBAMetrics();
-const albiMetrics = await clisonix.asi.getALBIMetrics();
-const jonaMetrics = await clisonix.asi.getJONAMetrics();
-
-// Trigger sync
-await clisonix.asi.triggerSync();
+// Get high-level health without protected component details
+const health = await clisonix.asi.getHealth();
 ```
 
 ### Billing API
@@ -124,23 +119,8 @@ const checkout = await clisonix.billing.createCheckout('pro');
 const usage = await clisonix.billing.getUsage();
 ```
 
-### Reporting API (Port 8001)
-Docker and system metrics.
-
-```typescript
-// Get Docker containers
-const containers = await clisonix.reporting.getDockerContainers();
-console.log(`${containers.total} containers, ${containers.healthy} healthy`);
-
-// Get Docker stats
-const stats = await clisonix.reporting.getDockerStats();
-
-// Get system metrics
-const metrics = await clisonix.reporting.getSystemMetrics();
-```
-
-### Excel API (Port 8002)
-Excel and reporting operations.
+### Excel API
+User-facing report generation operations.
 
 ```typescript
 // Generate Excel report
@@ -159,6 +139,7 @@ const templates = await clisonix.excel.getTemplates();
 const clisonix = new Clisonix({
   apiKey: 'your-api-key',
   baseUrl: 'https://api.clisonix.com', // Optional, defaults to production
+  excelBaseUrl: 'https://excel.clisonix.com', // Optional
   timeout: 30000, // Optional, request timeout in ms
   retries: 3 // Optional, number of retry attempts
 });
@@ -200,9 +181,21 @@ import {
 | Service | URL | Description |
 |---------|-----|-------------|
 | Main API | https://api.clisonix.com | Core, Brain, EEG, ASI, Billing |
-| Reporting | https://reporting.clisonix.com | Docker, System Metrics |
 | Excel | https://excel.clisonix.com | Excel Reports |
 | Frontend | https://clisonix.com | Web Dashboard |
+
+## Public Security Boundary
+
+This SDK publishes how developers use Clisonix, not the protected mechanisms that operate it. It does not expose:
+
+- kernel, OS-CLX runtime, scheduler, or memory internals;
+- hardware or bare-metal orchestration;
+- Sovereign Fabric topology or control paths;
+- container, host, peer, or node inventory;
+- component-level ALBA, ALBI, JONA, NIN, MALI, or NodeDB metrics;
+- security primitives or privileged maintenance operations.
+
+See the repository-level [Clisonix Public Interface and Protected Core Policy](../PUBLICATION_POLICY.md).
 
 ## License
 
